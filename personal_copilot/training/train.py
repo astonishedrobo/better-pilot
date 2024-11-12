@@ -55,6 +55,7 @@ class ModelArguments:
             "help": "Path to pretrained model or model identifier from huggingface.co/models"
         }
     )
+    existing_adapters: Optional[str] = field(default=None)
     lora_alpha: Optional[int] = field(default=16)
     lora_dropout: Optional[float] = field(default=0.1)
     lora_r: Optional[int] = field(default=64)
@@ -334,6 +335,19 @@ def loftq_init(model, tokenizer, train_dataset, max_seq_length, args):
     else:
         replace_lora_weights_loftq(model)
 
+def load_checkpoint(args, data_args, training_args):
+    if args.use_unsloth:
+        from unsloth import FastLanguageModel
+    load_in_4bit = args.use_4bit_quantization  
+    if args.use_peft_lora and args.use_unsloth and args.existing_adapters:
+        print(f"Loading From Checkpoint {args.existing_adapters}")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            args.existing_adapters,
+            max_seq_length=data_args.max_seq_length,
+            load_in_4bit=load_in_4bit,
+        )
+
+        return model, tokenizer
 
 def create_and_prepare_model(args, data_args, training_args):
     device_map = None
@@ -426,6 +440,7 @@ def create_and_prepare_model(args, data_args, training_args):
             random_state=training_args.seed,
             max_seq_length=data_args.max_seq_length,
         )
+    
     return model
 
 
@@ -434,7 +449,11 @@ def main(model_args, data_args, training_args):
     set_seed(training_args.seed)
 
     # load the tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    if model_args.existing_adapters == None:
+        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+        model = create_and_prepare_model(model_args, data_args, training_args)
+    else:
+        model, tokenizer = load_checkpoint(model_args, data_args, training_args)
 
     # load the datasets
     train_dataset, eval_dataset = create_datasets(
@@ -442,7 +461,6 @@ def main(model_args, data_args, training_args):
     )
     train_dataset.start_iteration = 0
 
-    model = create_and_prepare_model(model_args, data_args, training_args)
     # gradient ckpt
     model.config.use_cache = not training_args.gradient_checkpointing
     training_args.gradient_checkpointing = (
@@ -492,4 +510,5 @@ if __name__ == "__main__":
         )
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    # print(training_args)
     main(model_args, data_args, training_args)
