@@ -170,6 +170,7 @@ class ConstantLengthDataset(IterableDataset):
         fim_spm_rate=0.5,
         seed=0,
         shuffle=False,
+        num_train_epochs=0
     ):
         self.tokenizer = tokenizer
         self.concat_token_id = tokenizer.eos_token_id
@@ -194,6 +195,33 @@ class ConstantLengthDataset(IterableDataset):
         if not self.suffix_tok_id and self.fim_rate > 0:
             print("FIM is not supported by tokenizer, disabling FIM")
             self.fim_rate = 0
+        
+        if num_train_epochs > 0:
+            self.num_sequences = self._calculate_exact_sequence_count()
+            print('Number of Sequences: ', self.num_sequences)
+        else:
+            self.num_sequences = None
+
+    def _calculate_exact_sequence_count(self):
+        """
+        Tokenizes the entire dataset and calculates the exact number of `seq_length` sequences.
+        """
+        total_token_count = 0
+        for example in self.dataset:
+            content = example[self.content_field]
+            tokenized_content = self.tokenizer(content, truncation=False, add_special_tokens=False)["input_ids"]
+            total_token_count += len(tokenized_content)
+
+        # Calculate the exact number of full `seq_length` sequences
+        exact_sequence_count = total_token_count // self.seq_length
+        return exact_sequence_count
+    
+    def __len__(self):
+        # Return exact number of sequences if calculated, otherwise raise an error
+        if self.num_sequences is not None:
+            return self.num_sequences
+        else:
+            raise ValueError("Dataset length is not defined for non-epoch-based training.")
 
     def __iter__(self):
         iterator = iter(self.dataset)
@@ -250,7 +278,7 @@ class ConstantLengthDataset(IterableDataset):
                 }
 
 
-def create_datasets(tokenizer, args, seed):
+def create_datasets(tokenizer, args, seed, epochs=0):
     dataset = load_dataset(args.dataset_name, split=args.splits)
     dataset = dataset.train_test_split(
         test_size=args.test_size, seed=seed, shuffle=True
@@ -273,6 +301,7 @@ def create_datasets(tokenizer, args, seed):
         fim_spm_rate=args.fim_spm_rate,
         seed=seed,
         shuffle=True,
+        num_train_epochs=epochs
     )
     valid_dataset = ConstantLengthDataset(
         tokenizer,
@@ -284,6 +313,7 @@ def create_datasets(tokenizer, args, seed):
         fim_rate=args.fim_rate,
         fim_spm_rate=args.fim_spm_rate,
         seed=seed,
+        num_train_epochs=epochs
     )
     print(f"A sample of valid dataset: {next(iter(valid_dataset))}")
     return train_dataset, valid_dataset
@@ -457,7 +487,7 @@ def main(model_args, data_args, training_args):
 
     # load the datasets
     train_dataset, eval_dataset = create_datasets(
-        tokenizer, data_args, training_args.seed
+        tokenizer, data_args, training_args.seed, training_args.num_train_epochs
     )
     train_dataset.start_iteration = 0
 
